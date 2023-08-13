@@ -140,6 +140,59 @@ Describe $CommandName -Tag IntegrationTests {
         }
     }
 
+    Context "When source and destination are the same table" {
+        BeforeAll {
+            $PSDefaultParameterValues["*-Dba*:EnableException"] = $true
+
+            # A second database on the same instance, holding a table with the same name as the source.
+            $otherDbName = "dbatoolsci_copytable_$(Get-Random)"
+            $null = New-DbaDatabase -SqlInstance $TestConfig.InstanceCopy1 -Name $otherDbName
+            $otherDb = Get-DbaDatabase -SqlInstance $TestConfig.InstanceCopy1 -Database $otherDbName
+            $null = $otherDb.Query("CREATE TABLE dbo.dbatoolsci_example (id int)")
+
+            $PSDefaultParameterValues.Remove("*-Dba*:EnableException")
+        }
+
+        AfterAll {
+            $PSDefaultParameterValues["*-Dba*:EnableException"] = $true
+
+            $null = Remove-DbaDatabase -SqlInstance $TestConfig.InstanceCopy1 -Database $otherDbName -ErrorAction SilentlyContinue
+
+            $PSDefaultParameterValues.Remove("*-Dba*:EnableException")
+        }
+
+        It "refuses to copy a table onto itself when the destination is the same instance given by name" {
+            # The destination is a new connection, so the check has to compare names and not SMO objects.
+            $splatSameTable = @{
+                SqlInstance      = $TestConfig.InstanceCopy1
+                Destination      = $TestConfig.InstanceCopy1
+                Database         = "tempdb"
+                Table            = "dbo.dbatoolsci_example"
+                DestinationTable = "dbo.dbatoolsci_example"
+                WarningAction    = "SilentlyContinue"
+            }
+            $result = Copy-DbaDbTableData @splatSameTable
+            $result | Should -BeNullOrEmpty
+            $WarnVar | Should -Match "Source and Destination must be different"
+            $sourceDb.Query("select id from dbo.dbatoolsci_example").Count | Should -Be 10
+        }
+
+        It "copies a table to a table of the same name in another database on the same instance" {
+            $splatOtherDatabase = @{
+                SqlInstance         = $TestConfig.InstanceCopy1
+                Destination         = $TestConfig.InstanceCopy1
+                Database            = "tempdb"
+                Table               = "dbo.dbatoolsci_example"
+                DestinationDatabase = $otherDbName
+                DestinationTable    = "dbo.dbatoolsci_example"
+            }
+            $result = Copy-DbaDbTableData @splatOtherDatabase
+            $result.RowsCopied | Should -Be 10
+            $WarnVar | Should -BeNullOrEmpty
+            $otherDb.Query("select id from dbo.dbatoolsci_example").Count | Should -Be 10
+        }
+    }
+
     Context "When testing pipeline functionality" {
         It "supports piping" {
             $null = Get-DbaDbTable -SqlInstance $TestConfig.InstanceCopy1 -Database tempdb -Table dbatoolsci_example | Copy-DbaDbTableData -DestinationTable dbatoolsci_example2 -Truncate
